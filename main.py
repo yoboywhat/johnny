@@ -1,19 +1,11 @@
-import csv
-import re
 import pandas as pd
+import re
 from difflib import get_close_matches
-
-def load_world_locations(file_path):
-    locations = {}
-    with open(file_path, 'r') as csvfile:
-        reader = csv.DictReader(csvfile)
-        for row in reader:
-            location_name = f"{row['locationName']}, {row['countryName']}".lower()
-            locations[location_name] = row['geonameID']
-    return locations
+from tqdm import tqdm
+from functools import lru_cache
 
 def normalize_location(location):
-    location = re.sub(r'\s+', ' ', location.strip().lower())
+    location = re.sub(r'\s+', ' ', location.strip().lower())  # Normalize spaces and case
     parts = location.split(',')
     
     if len(parts) > 2 and parts[-1].strip() == parts[-2].strip():
@@ -25,10 +17,14 @@ def normalize_location(location):
         return f"{city}, {country}"
     else:
         return location
+def load_world_locations(file_path):
+    df = pd.read_csv(file_path)
+    df['normalized_location'] = df.apply(lambda row: f"{row['locationName']}, {row['countryName']}".lower(), axis=1)
+    location_dict = pd.Series(df['geonameID'].values, index=df['normalized_location']).to_dict()
+    return location_dict
 
-def match_location(location, world_locations):
-    normalized_location = normalize_location(location)
-    
+@lru_cache(maxsize=None)
+def match_location(normalized_location, world_locations):
     location_id = world_locations.get(normalized_location)
     
     if location_id:
@@ -46,44 +42,24 @@ input_file = "/Users/johnnyrobert/Desktop/Jobs Bringer/Datasets/Companies Datase
 world_locations_file = "/Users/johnnyrobert/Desktop/Jobs Bringer/Datasets/World Locations Dataset/WorldLocations.csv"
 output_file = "/Users/johnnyrobert/Desktop/Jobs Bringer/Datasets/Companies Dataset/company_with_location_ids.csv"
 
+# Load world locations
 world_locations = load_world_locations(world_locations_file)
 
-start_time = time.time()
-total_lines = sum(1 for _ in open(input_file, 'r'))
+# Load company data
+company_df = pd.read_csv(input_file)
 
-with open(input_file, "r") as file:
-    reader = csv.DictReader(file)
+company_df['normalized_location'] = company_df.apply(lambda row: normalize_location(f"{row['locality']}, {row['country']}"), axis=1)
 
-    with open(output_file, "w") as output:
-        writer = csv.writer(output)
-        writer.writerow(["company_name", "location_id", "location_name"])
+# Create columns for the location ID and name
+company_df['location_id'] = company_df['normalized_location'].apply(lambda loc: match_location(loc, world_locations))
+company_df['location_name'] = company_df['normalized_location']
 
-        unmatched_locations = []
+# Replace unmatched locations with a default value or leave them as is
+company_df.loc[company_df['location_id'].isna(), 'location_id'] = "N/A"
 
-        for row in reader:
-            company_name = row["name"]
+output_df = company_df[['name', 'location_id', 'location_name']]
+output_df.columns = ['company_name', 'location_id', 'location_name']
 
-            words = re.findall(r"[\w']+", company_name)
-            capitalized_words = [word.capitalize() if "'" not in word else word.split("'")[0].capitalize() + "'" + word.split("'")[1].lower() for word in words]
-            capitalized_company_name = " ".join(capitalized_words)
+output_df.to_csv(output_file, index=False)
 
-            company_location = f"{row['locality']}, {row['country']}"
-            normalized_location = normalize_location(company_location)
-
-            location_id = match_location(normalized_location, world_locations)
-
-            if location_id:
-                writer.writerow([capitalized_company_name, location_id, normalized_location])
-            else:
-                writer.writerow([capitalized_company_name, "N/A", normalized_location])
-                unmatched_locations.append(normalized_location)
-
-    csv_file_size = os.path.getsize(output_file) / (1024 * 1024)  # size in MB
-    print(f"CSV file '{output_file}' created successfully. CSV file size: {csv_file_size:.2f} MB.")
-
-unmatched_file = "/Users/johnnyrobert/Desktop/Jobs Bringer/Datasets/Companies Dataset/unmatched_locations.txt"
-with open(unmatched_file, "w") as file:
-    file.write("\n".join(unmatched_locations))
-
-print(f"Unmatched locations saved to: {unmatched_file}")
-
+print(f"CSV file '{output_file}' created successfully. File size: {os.path.getsize(output_file) / (1024 * 1024):.2f} MB.")
