@@ -17,26 +17,29 @@ def normalize_location(location):
         return f"{city}, {country}"
     else:
         return location
+
 def load_world_locations(file_path):
     df = pd.read_csv(file_path)
     df['normalized_location'] = df.apply(lambda row: f"{row['locationName']}, {row['countryName']}".lower(), axis=1)
     location_dict = pd.Series(df['geonameID'].values, index=df['normalized_location']).to_dict()
     return location_dict
 
-@lru_cache(maxsize=None)
-def match_location(normalized_location, world_locations):
-    location_id = world_locations.get(normalized_location)
+def create_match_location_function(world_locations):
+    @lru_cache(maxsize=None)
+    def match_location(normalized_location):
+        location_id = world_locations.get(normalized_location)
+        
+        if location_id:
+            return location_id
+        location_keys = list(world_locations.keys())
+        close_matches = get_close_matches(normalized_location, location_keys, n=1, cutoff=0.8)  # Adjust the cutoff as needed
+        
+        if close_matches:
+            return world_locations[close_matches[0]]
+        
+        return None
     
-    if location_id:
-        return location_id
-    
-    location_keys = list(world_locations.keys())
-    close_matches = get_close_matches(normalized_location, location_keys, n=1, cutoff=0.8)  # Adjust the cutoff as needed
-    
-    if close_matches:
-        return world_locations[close_matches[0]]
-    
-    return None
+    return match_location
 
 input_file = "/Users/johnnyrobert/Desktop/Jobs Bringer/Datasets/Companies Dataset/companies_sorted.csv"
 world_locations_file = "/Users/johnnyrobert/Desktop/Jobs Bringer/Datasets/World Locations Dataset/WorldLocations.csv"
@@ -48,10 +51,12 @@ world_locations = load_world_locations(world_locations_file)
 # Load company data
 company_df = pd.read_csv(input_file)
 
+# Normalize company locations
 company_df['normalized_location'] = company_df.apply(lambda row: normalize_location(f"{row['locality']}, {row['country']}"), axis=1)
 
-# Create columns for the location ID and name
-company_df['location_id'] = company_df['normalized_location'].apply(lambda loc: match_location(loc, world_locations))
+match_location = create_match_location_function(world_locations)
+
+company_df['location_id'] = company_df['normalized_location'].apply(match_location)
 company_df['location_name'] = company_df['normalized_location']
 
 # Replace unmatched locations with a default value or leave them as is
